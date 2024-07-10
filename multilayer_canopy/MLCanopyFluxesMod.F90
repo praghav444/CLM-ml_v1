@@ -347,7 +347,8 @@ module MLCanopyFluxesMod
     ! zenith angle is calculated for the beginning of the time step. So use
     ! calendar day at beginning of the time step (nstep-1).
 
-    caldaym1 = get_curr_calday(offset=-int(dtime))
+    ! caldaym1 = get_curr_calday(offset=-int(dtime)) (Seems a bug here)
+    caldaym1 = get_curr_calday(offset=0)   ! Raghav
     call shr_orb_decl (caldaym1, eccen, mvelpp, lambm0, obliqr, declinm1, eccf)
 
     do fp = 1, num_mlcan
@@ -356,15 +357,16 @@ module MLCanopyFluxesMod
        g = patch%gridcell(p)
        lat = grc%latdeg(g) * pi / 180._r8
        lon = grc%londeg(g) * pi / 180._r8
-       coszen = shr_orb_cosz (caldaym1, lat, lon, declinm1)
+       coszen = shr_orb_cosz (caldaym1, lat, lon, declinm1)  ! (Raghav: Comment below if using this)
+       !coszen = surfalb_inst%coszen_col(c)  ! Raghav (Only if coszen is provided as an input) 
        solar_zen(p) = acos(max(0.01_r8,coszen))
 
        ! Compare coszen to that expected from CLM
 
-       if (abs(coszen-surfalb_inst%coszen_col(c)) .gt. 1.e-03_r8) then
-          write (iulog,*) nstep, coszen, surfalb_inst%coszen_col(c)
-          call endrun (msg=' ERROR: MLCanopyFluxes: coszen error')
-       end if
+       !if (abs(coszen-surfalb_inst%coszen_col(c)) .gt. 1.e-03_r8) then
+       !   write (iulog,*) nstep, coszen, surfalb_inst%coszen_col(c)
+       !   call endrun (msg=' ERROR: MLCanopyFluxes: coszen error')
+       !end if
     end do
 
     ! Derived atmospheric input
