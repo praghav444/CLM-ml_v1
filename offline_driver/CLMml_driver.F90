@@ -28,270 +28,270 @@ contains
 
   !-----------------------------------------------------------------------
   subroutine CLMml_drv (bounds)
-    !
-    ! !DESCRIPTION:
-    ! Model driver to process the tower site and year
-    !
-    ! !USES:
-    use clm_instMod
-    use MLclm_varctl, only : turb_type
-    use clm_time_manager, only : start_date_ymd, start_date_tod, curr_date_tod, dtstep, itim
-    use clm_time_manager, only : get_curr_date, get_curr_calday, get_curr_time
-    use clm_varorb, only : eccen, mvelpp, lambm0, obliqr
-    use controlMod, only : control
-    use fileutils, only : getavu, relavu
-    use filterMod, only : setFilters, filter
-    use lnd_comp_mct, only : lnd_init_mct, lnd_run_mct
-    use PatchType, only : patch
-    use pftconMod, only : pftcon
-    use shr_orb_mod, only : shr_orb_params
-    use TowerDataMod, only : tower_id, tower_num
-    use TowerMetMod, only : TowerMet
-    !
-    ! !ARGUMENTS:
-    implicit none
-    type(bounds_type), intent(in) :: bounds
-    !
-    ! !LOCAL VARIABLES:
-    real(r8) :: obliq, mvelp                   ! Miscellaneous orbital parameters (not used)
-    integer  :: ntim                           ! Number of time steps to process
-    integer  :: time_indx                      ! Time index for CLM history file
-    integer  :: curr_time_day                  ! Number of whole days
-    integer  :: curr_time_sec                  ! Remaining seconds in the day
-    integer  :: yr                             ! Year (1900, ...)
-    integer  :: mon                            ! Month (1, ..., 12)
-    integer  :: day                            ! Day of month (1, ..., 31)
-    real(r8) :: curr_calday                    ! Current calendar day (equals 1.000 on 0Z January 1 of current year)
-    real(r8) :: start_calday_clm               ! Calendar day at start of CLM history file
-    integer  :: run_start_date                 ! Temporary variable
-    integer  :: run_start_tod                  ! Temporary variable
-    integer  :: clm_start_ymd                  ! CLM history file start date (yyyymmdd format)
-    integer  :: clm_start_tod                  ! CLM history file start time-of-day (seconds past 0Z UTC)
-    integer  :: nout1, nout2, nout3, nout4     ! Fortran unit number
-    integer  :: nin1                           ! Fortran unit number
-
-    character(len=256) :: diratm               ! Tower meteorology file directory path
-    character(len=256) :: dirclm               ! CLM history file directory path
-    character(len=256) :: dirout               ! Model output file directory path
-    character(len=256) :: dirin                ! Model input file directory path for profile data
-    character(len=256) :: ext                  ! Local file name
-    character(len=256) :: fin_tower            ! Tower meteorology file name
-    character(len=256) :: fin_clm              ! CLM file name
-    character(len=256) :: fout1, fout2         ! Full output file name, including directory path
-    character(len=256) :: fout3, fout4         ! Full output file name, including directory path
-    character(len=256) :: fin1                 ! Full input file name for profile data, including directory path
-    !---------------------------------------------------------------------
-
-    ! Initialize namelist run control variables
-
-    call control (ntim, clm_start_ymd, clm_start_tod, diratm, dirclm, dirout, dirin)
-
-    !---------------------------------------------------------------
-    ! Extract year (yr), month (mon), and day of month (day)
-    ! from start_date_ymd
-    !---------------------------------------------------------------
-
-    itim = 1
-    call get_curr_date (yr, mon, day, curr_date_tod)
-
-    write (iulog,*) 'Processing: ',tower_id(tower_num),yr,mon
-
-    !---------------------------------------------------------------
-    ! Initialize CLM
-    !---------------------------------------------------------------
-
-    ! CLM uses a subgrid hierarchy consisting of grid cell (g),
-    ! land unit (l), column (c), and patch (p). This code processes
-    ! one patch (one grid cell with one column and one patch).
-
-    call lnd_init_mct (bounds)
-
-    ! Reset leaf/stem area density parameters for US-Me2 to pine.
-    ! This is hardwired for one patch (p=1).
-
-    if (tower_id(tower_num) == 'US-Me2') then
-       pftcon%pbeta_lai(patch%itype(1)) = 11.5_r8
-       pftcon%qbeta_lai(patch%itype(1)) = 3.5_r8
-       pftcon%pbeta_sai(patch%itype(1)) = 11.5_r8
-       pftcon%qbeta_sai(patch%itype(1)) = 3.5_r8
-    end if
-
-    ! Build the necessary CLM filters to process patches
-
-    call setFilters (filter)
-
-    !---------------------------------------------------------------
-    ! Calculate orbital parameters for this year
-    !---------------------------------------------------------------
-
-    call shr_orb_params (yr, eccen, obliq, mvelp, obliqr, lambm0, mvelpp)
-
-    !---------------------------------------------------------------
-    ! Tower meteorology file (fin_tower) and CLM history file (fin_clm)
-    ! to read forcing data. These are netcdf files.
-    !---------------------------------------------------------------
-
-    write (ext,'(a6,"/",i4.4,"-",i2.2,".nc")') tower_id(tower_num),yr,mon
-    fin_tower = diratm(1:len(trim(diratm)))//ext(1:len(trim(ext)))
-
-    if (tower_id(tower_num) == 'CHATS7') then
-       write (ext,'("CHATS_A15.clm2.h1.2007-04-01-00000.nc")')
-    else if (tower_id(tower_num) == 'UMBSmw') then
-       write (ext,'("clm50d30wspinsp_US-UMB_WOZNIAK.clm2.h1.",i4.4,".nc")') yr
-    else
-       write (ext,'("lp67wspinPTCLM_",a6,"_I_2000_CLM45.clm2.h1.",i4.4,".nc")') tower_id(tower_num),yr
-    end if
-    fin_clm = dirclm(1:len(trim(dirclm)))//tower_id(tower_num)//"/"//ext(1:len(trim(ext)))
-
-    !---------------------------------------------------------------
-    ! Read tower meteorology data once to get acclimation temperature
-    !---------------------------------------------------------------
-
-    call init_acclim (fin_tower, tower_num, ntim, bounds%begp, bounds%endp, &
-    atm2lnd_inst, temperature_inst, frictionvel_inst, mlcanopy_inst)
-
-    !---------------------------------------------------------------
-    ! Initialize tower vegetation
-    !---------------------------------------------------------------
-
-    call TowerVeg (tower_num, bounds%begp, bounds%endp, canopystate_inst, mlcanopy_inst)
-
-    !---------------------------------------------------------------
-    ! Read CLM history file to initialize soil temperature and
-    ! moisture profiles
-    !---------------------------------------------------------------
-
-    ! Find calendar day of first time slice in CLM history file based on
-    ! start date (clm_start_ymd) and start time-of-day (clm_start_tod).
-    ! This is a hack because get_curr_calday uses start_date_ymd and
-    ! start_date_tod, but it works.
-
-    run_start_date = start_date_ymd             ! Save this
-    run_start_tod  = start_date_tod             ! Save this
-
-    start_date_ymd = clm_start_ymd              ! Use this to get calendar date for CLM history file
-    start_date_tod = clm_start_tod              ! Use this to get calendar date for CLM history file
-
-    itim = 1                                    ! Here, itim is the first time slice in CLM history file
-    start_calday_clm = get_curr_calday(offset=0)
-
-    ! Now find calendar day for start of the simulation run
-
-    start_date_ymd = run_start_date             ! Reset to correct value for start of run
-    start_date_tod = run_start_tod              ! Reset to correct value for start of run
-
-    itim = 1                                    ! itim is the first time step of the simulation
-    curr_calday = get_curr_calday(offset=0)
-
-    ! Calculate correct time slice (number of time steps) into CLM history file
-
-    time_indx = nint((curr_calday - start_calday_clm) * 86400._r8 / float(dtstep)) + 1
-
-    ! Read history file
-
-    call SoilInit (fin_clm, time_indx, bounds%begc, bounds%endc, soilstate_inst, &
-    waterstate_inst, temperature_inst)
-
-    !---------------------------------------------------------------
-    ! Model output files for fluxes (fout1), auxillary data (fout2),
-    ! profile data (fout3), and sun/shade fluxes (fout4). These are
-    ! ascii data files and so must be opened here.
-    !---------------------------------------------------------------
-
-    write (ext,'(a6,"_",i4.4,"-",i2.2,"_flux.out")') tower_id(tower_num),yr,mon
-    fout1 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
-    nout1 = getavu()
-    open (unit=nout1, file=trim(fout1), action="write")
-
-    write (ext,'(a6,"_",i4.4,"-",i2.2,"_aux.out")') tower_id(tower_num),yr,mon
-    fout2 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
-    nout2 = getavu()
-    open (unit=nout2, file=trim(fout2), action="write")
-
-    write (ext,'(a6,"_",i4.4,"-",i2.2,"_profile.out")') tower_id(tower_num),yr,mon
-    fout3 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
-    nout3 = getavu()
-    open (unit=nout3, file=trim(fout3), action="write")
-
-    write (ext,'(a6,"_",i4.4,"-",i2.2,"_fsun.out")') tower_id(tower_num),yr,mon
-    fout4 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
-    nout4 = getavu()
-    open (unit=nout4, file=trim(fout4), action="write")
-
-    !---------------------------------------------------------------
-    ! Open ascii profile data input file if desired
-    !---------------------------------------------------------------
-
-    if (turb_type .eq. -1) then
-       write (ext,'(a6,"_",i4.4,"-",i2.2,"_profile.out")') tower_id(tower_num),yr,mon
-       fin1 = dirin(1:len(trim(dirin)))//ext(1:len(trim(ext)))
-       nin1 = getavu()
-       open (unit=nin1, file=trim(fin1), action="read")
-    end if
-
-    !---------------------------------------------------------------
-    ! Time stepping loop
-    !---------------------------------------------------------------
-
-    write (iulog,*) 'Starting time stepping loop .....'
-
-    do itim = 1, ntim
-
-       ! Get current date, time, and calendar day. These are for itim (at
-       ! end of the time step). 
-       !
-       ! itim = time index from start date
-       ! curr_calday = current calendar day (equal to 1.000 on 0Z January 1 of current year)
-
-       call get_curr_date (yr, mon, day, curr_date_tod)
-       call get_curr_time (curr_time_day, curr_time_sec)
-       curr_calday = get_curr_calday(offset=0)
-
-       ! Calculate correct time slice (number of time steps) into CLM history file
-
-       time_indx = nint((curr_calday - start_calday_clm) * 86400._r8 / float(dtstep)) + 1
-
-       ! Read tower meteorology for current time slice
-
-       call TowerMet (fin_tower, itim, tower_num, bounds%begp, bounds%endp, atm2lnd_inst, &
-       frictionvel_inst)
-
-       ! Read T,Q,U profile data for current time step
-
-       if (turb_type .eq. -1) call ReadCanopyProfiles (itim, curr_calday, nin1, mlcanopy_inst)
-
-       ! Call model to calculate fluxes (as in CLM)
-
-       call lnd_run_mct (bounds, time_indx, fin_clm)
-
-       ! Write output files
-
-       call output (curr_calday, nout1, nout2, nout3, nout4, mlcanopy_inst)
-
-    end do
-
-    !---------------------------------------------------------------
-    ! Close ascii output and input files
-    !---------------------------------------------------------------
-
-    close (nout1)
-    call relavu (nout1)
-    close (nout2)
-    call relavu (nout2)
-    close (nout3)
-    call relavu (nout3)
-    close (nout4)
-    call relavu (nout4)
-
-    if (turb_type .eq. -1) then
-       close (nin1)
-       call relavu (nin1)
-    end if
-
-    write (iulog,*) 'Successfully finished simulation'
-
+      !
+      ! !DESCRIPTION:
+      ! Model driver to process the tower site and year
+      !
+      ! !USES:
+      use clm_instMod
+      use MLclm_varctl, only : turb_type
+      use clm_time_manager, only : start_date_ymd, start_date_tod, curr_date_tod, dtstep, itim
+      use clm_time_manager, only : get_curr_date, get_curr_calday, get_curr_time
+      use clm_varorb, only : eccen, mvelpp, lambm0, obliqr
+      use controlMod, only : control
+      use fileutils, only : getavu, relavu
+      use filterMod, only : setFilters, filter
+      use lnd_comp_mct, only : lnd_init_mct, lnd_run_mct
+      use PatchType, only : patch
+      use pftconMod, only : pftcon
+      use shr_orb_mod, only : shr_orb_params
+      use TowerDataMod, only : tower_id, tower_num
+      use TowerMetMod, only : TowerMet
+      !
+      ! !ARGUMENTS:
+      implicit none
+      type(bounds_type), intent(in) :: bounds
+      !
+      ! !LOCAL VARIABLES:
+      real(r8) :: obliq, mvelp                   ! Miscellaneous orbital parameters (not used)
+      integer  :: ntim                           ! Number of time steps to process
+      integer  :: time_indx                      ! Time index for CLM history file
+      integer  :: curr_time_day                  ! Number of whole days
+      integer  :: curr_time_sec                  ! Remaining seconds in the day
+      integer  :: yr                             ! Year (1900, ...)
+      integer  :: mon                            ! Month (1, ..., 12)
+      integer  :: day                            ! Day of month (1, ..., 31)
+      real(r8) :: curr_calday                    ! Current calendar day (equals 1.000 on 0Z January 1 of current year)
+      real(r8) :: start_calday_clm               ! Calendar day at start of CLM history file
+      integer  :: run_start_date                 ! Temporary variable
+      integer  :: run_start_tod                  ! Temporary variable
+      integer  :: clm_start_ymd                  ! CLM history file start date (yyyymmdd format)
+      integer  :: clm_start_tod                  ! CLM history file start time-of-day (seconds past 0Z UTC)
+      integer  :: nout1, nout2, nout3, nout4     ! Fortran unit number
+      integer  :: nin1                           ! Fortran unit number
+  
+      character(len=256) :: diratm               ! Tower meteorology file directory path
+      character(len=256) :: dirclm               ! CLM history file directory path
+      character(len=256) :: dirout               ! Model output file directory path
+      character(len=256) :: dirin                ! Model input file directory path for profile data
+      character(len=256) :: ext                  ! Local file name
+      character(len=256) :: fin_tower            ! Tower meteorology file name
+      character(len=256) :: fin_clm              ! CLM file name
+      character(len=256) :: fout1, fout2         ! Full output file name, including directory path
+      character(len=256) :: fout3, fout4         ! Full output file name, including directory path
+      character(len=256) :: fin1                 ! Full input file name for profile data, including directory path
+  
+      ! Variables to track run time (Raghav)
+      integer :: start_seconds, end_seconds
+      real(r8) :: run_time
+  
+      ! Initialize continue flag
+      logical :: continue
+  
+      ! Get start time
+      call system_clock(start_seconds)
+      !-----
+      ! Initialize namelist run control variables
+  
+      call control (ntim, clm_start_ymd, clm_start_tod, diratm, dirclm, dirout, dirin)
+  
+      ! Extract year (yr), month (mon), and day of month (day)
+      ! from start_date_ymd
+  
+      itim = 1
+      call get_curr_date (yr, mon, day, curr_date_tod)
+  
+      write (iulog,*) 'Processing: ',tower_id(tower_num),yr,mon
+  
+      ! Initialize CLM
+  
+      call lnd_init_mct (bounds)
+  
+      ! Reset leaf/stem area density parameters for US-Me2 to pine.
+      ! This is hardwired for one patch (p=1).
+  
+      if (tower_id(tower_num) == 'US-Me2') then
+         pftcon%pbeta_lai(patch%itype(1)) = 11.5_r8
+         pftcon%qbeta_lai(patch%itype(1)) = 3.5_r8
+         pftcon%pbeta_sai(patch%itype(1)) = 11.5_r8
+         pftcon%qbeta_sai(patch%itype(1)) = 3.5_r8
+      end if
+  
+      ! Build the necessary CLM filters to process patches
+  
+      call setFilters (filter)
+  
+      ! Calculate orbital parameters for this year
+  
+      call shr_orb_params (yr, eccen, obliq, mvelp, obliqr, lambm0, mvelpp)
+  
+      ! Tower meteorology file (fin_tower) and CLM history file (fin_clm)
+      ! to read forcing data. These are netcdf files.
+  
+      write (ext,'(a6,"/",i4.4,"-",i2.2,".nc")') tower_id(tower_num),yr,mon
+      fin_tower = diratm(1:len(trim(diratm)))//ext(1:len(trim(ext)))
+  
+      if (tower_id(tower_num) == 'CHATS7') then
+         write (ext,'("CHATS_A15.clm2.h1.2007-04-01-00000.nc")')
+      else if (tower_id(tower_num) == 'UMBSmw') then
+         write (ext,'("clm50d30wspinsp_US-UMB_WOZNIAK.clm2.h1.",i4.4,".nc")') yr
+      else
+         write (ext,'("lp67wspinPTCLM_",a6,"_I_2000_CLM45.clm2.h1.",i4.4,".nc")') tower_id(tower_num),yr
+      end if
+      fin_clm = dirclm(1:len(trim(dirclm)))//tower_id(tower_num)//"/"//ext(1:len(trim(ext)))
+  
+      ! Read tower meteorology data once to get acclimation temperature
+  
+      call init_acclim (fin_tower, tower_num, ntim, bounds%begp, bounds%endp, &
+      atm2lnd_inst, temperature_inst, frictionvel_inst, mlcanopy_inst)
+  
+      ! Initialize tower vegetation
+  
+      call TowerVeg (tower_num, bounds%begp, bounds%endp, canopystate_inst, mlcanopy_inst)
+  
+      ! Read CLM history file to initialize soil temperature and
+      ! moisture profiles
+  
+      ! Find calendar day of first time slice in CLM history file based on
+      ! start date (clm_start_ymd) and start time-of-day (clm_start_tod).
+      ! This is a hack because get_curr_calday uses start_date_ymd and
+      ! start_date_tod, but it works.
+  
+      run_start_date = start_date_ymd             ! Save this
+      run_start_tod  = start_date_tod             ! Save this
+  
+      start_date_ymd = clm_start_ymd              ! Use this to get calendar date for CLM history file
+      start_date_tod = clm_start_tod              ! Use this to get calendar date for CLM history file
+  
+      itim = 1                                    ! Here, itim is the first time slice in CLM history file
+      start_calday_clm = get_curr_calday(offset=0)
+  
+      ! Now find calendar day for start of the simulation run
+  
+      start_date_ymd = run_start_date             ! Reset to correct value for start of run
+      start_date_tod = run_start_tod              ! Reset to correct value for start of run
+  
+      itim = 1                                    ! itim is the first time step of the simulation
+      curr_calday = get_curr_calday(offset=0)
+  
+      ! Calculate correct time slice (number of time steps) into CLM history file
+  
+      time_indx = nint((curr_calday - start_calday_clm) * 86400._r8 / &
+      float(dtstep)) + 1
+      ! Read history file
+  
+      call SoilInit (fin_clm, time_indx, bounds%begc, bounds%endc, soilstate_inst, &
+      waterstate_inst, temperature_inst)
+  
+      !---------------------------------------------------------------
+      ! Model output files for fluxes (fout1), auxillary data (fout2),
+      ! profile data (fout3), and sun/shade fluxes (fout4). These are
+      ! ascii data files and so must be opened here.
+      !---------------------------------------------------------------
+  
+      write (ext,'(a6,"_",i4.4,"-",i2.2,"_flux.out")') tower_id(tower_num),yr,mon
+      fout1 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
+      nout1 = getavu()
+      open (unit=nout1, file=trim(fout1), action="write")
+  
+      write (ext,'(a6,"_",i4.4,"-",i2.2,"_aux.out")') tower_id(tower_num),yr,mon
+      fout2 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
+      nout2 = getavu()
+      open (unit=nout2, file=trim(fout2), action="write")
+  
+      write (ext,'(a6,"_",i4.4,"-",i2.2,"_profile.out")') tower_id(tower_num),yr,mon
+      fout3 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
+      nout3 = getavu()
+      open (unit=nout3, file=trim(fout3), action="write")
+  
+      write (ext,'(a6,"_",i4.4,"-",i2.2,"_fsun.out")') tower_id(tower_num),yr,mon
+      fout4 = dirout(1:len(trim(dirout)))//ext(1:len(trim(ext)))
+      nout4 = getavu()
+      open (unit=nout4, file=trim(fout4), action="write")
+  
+      !---------------------------------------------------------------
+      ! Open ascii profile data input file if desired
+      !---------------------------------------------------------------
+  
+      if (turb_type .eq. -1) then
+         write (ext,'(a6,"_",i4.4,"-",i2.2,"_profile.out")') tower_id(tower_num),yr,mon
+         fin1 = dirin(1:len(trim(dirin)))//ext(1:len(trim(ext)))
+         nin1 = getavu()
+         open (unit=nin1, file=trim(fin1), action="read")
+      end if
+  
+      !---------------------------------------------------------------
+      ! Time stepping loop
+      !---------------------------------------------------------------
+  
+      write (iulog,*) 'Starting time stepping loop .....'
+  
+      do itim = 1, ntim
+  
+         ! Get current date, time, and calendar day. These are for itim (at
+         ! end of the time step). 
+         !
+         ! itim = time index from start date
+         ! curr_calday = current calendar day (equal to 1.000 on 0Z January 1 of current year)
+  
+         print *, 'Processing time step:', itim, '/', ntim, '(', real(itim) / real(ntim) * 100.0_r8, '% complete)'  ! Raghav
+  
+         call get_curr_date (yr, mon, day, curr_date_tod)
+         call get_curr_time (curr_time_day, curr_time_sec)
+         curr_calday = get_curr_calday(offset=0)
+  
+         ! Calculate correct time slice (number of time steps) into CLM history file
+  
+         time_indx = nint((curr_calday - start_calday_clm) * 86400._r8 / float(dtstep)) + 1
+  
+         continue = .true.
+  
+         ! Read tower meteorology for current time slice
+         call TowerMet (fin_tower, itim, tower_num, bounds%begp, bounds%endp, atm2lnd_inst, frictionvel_inst)
+         if (.not. continue) cycle
+  
+         ! Read T,Q,U profile data for current time step
+         if (turb_type .eq. -1) then
+            call ReadCanopyProfiles (itim, curr_calday, nin1, mlcanopy_inst)
+            if (.not. continue) cycle
+         end if
+  
+         ! Call model to calculate fluxes (as in CLM)
+         call lnd_run_mct (bounds, time_indx, fin_clm)
+         if (.not. continue) cycle
+  
+         ! Write output files
+         call output (curr_calday, nout1, nout2, nout3, nout4, mlcanopy_inst)
+         if (.not. continue) cycle
+  
+      end do
+  
+      !---------------------------------------------------------------
+      ! Close ascii output and input files
+      !---------------------------------------------------------------
+  
+      close (nout1)
+      call relavu (nout1)
+      close (nout2)
+      call relavu (nout2)
+      close (nout3)
+      call relavu (nout3)
+      close (nout4)
+      call relavu (nout4)
+  
+      if (turb_type .eq. -1) then
+         close (nin1)
+         call relavu (nin1)
+      end if
+  
+      write (iulog,*) 'Successfully finished simulation'
+      ! Get end time and calculate run time (Raghav)
+      call system_clock(end_seconds)
+      run_time = (end_seconds - start_seconds) / 60.0 / 1.0e6
+      write (iulog, '(A, F12.8)') 'Total run time (minutes): ', run_time
+      !----
   end subroutine CLMml_drv
-
+  
   !-----------------------------------------------------------------------
   subroutine init_acclim (fin, tower_num, ntim, begp, endp, &
   atm2lnd_inst, temperature_inst, frictionvel_inst, mlcanopy_inst)
@@ -363,7 +363,8 @@ contains
     ! Average temperature over all time slices
 
     do p = begp, endp
-       t10(p) = t10(p) / float(ntim)
+       !t10(p) = t10(p) / float(ntim)
+       t10(p) = 300   ! Raghav (set acclimation temperature to 300 K) (Otherwise uncomment line above)
     end do
 
     end associate
@@ -508,7 +509,6 @@ contains
        status = nf_get_vara_double(ncid, varid, start3, count3, h2osoi_loc_clm50)
        if (status /= nf_noerr) call handle_err(status, "h2osoi_loc_clm50")
     end if
-
     ! Close file
 
     status = nf_close(ncid)
@@ -543,7 +543,7 @@ contains
              h2osoi_vol(c,j) = min(h2osoi_vol(c,j), watsat(c,j))
           end do
        end if
-
+       
        ! Set liquid water and ice
 
        do j = 1, nlevgrnd
