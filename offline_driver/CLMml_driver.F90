@@ -79,8 +79,13 @@ contains
       character(len=256) :: fin_clm              ! CLM file name
       character(len=256) :: fout1, fout2         ! Full output file name, including directory path
       character(len=256) :: fout3, fout4         ! Full output file name, including directory path
-      character(len=256) :: fin1                 ! Full input file name for profile data, including directory path
-  
+      character(len=256) :: fin1                 ! Full input file name for profile data, including directory path  
+
+      real(r8) :: par1              ! Parameter (pbeta_lai)
+      real(r8) :: par2              ! Parameter (qbeta_lai)
+      real(r8) :: par3              ! Parameter (psi50_gs)
+      real(r8) :: par4              ! Parameter (vcmaxpft)
+
       ! Variables to track run time (Raghav)
       integer :: start_seconds, end_seconds
       real(r8) :: run_time
@@ -93,7 +98,7 @@ contains
       !-----
       ! Initialize namelist run control variables
   
-      call control (ntim, clm_start_ymd, clm_start_tod, diratm, dirclm, dirout, dirin)
+      call control (ntim, clm_start_ymd, clm_start_tod, diratm, dirclm, dirout, dirin, par1, par2, par3, par4)
   
       ! Extract year (yr), month (mon), and day of month (day)
       ! from start_date_ymd
@@ -116,6 +121,11 @@ contains
          pftcon%pbeta_sai(patch%itype(1)) = 11.5_r8
          pftcon%qbeta_sai(patch%itype(1)) = 3.5_r8
       end if
+      pftcon%pbeta_lai(1:16) = par1
+      pftcon%qbeta_lai(1:16) = par2
+      pftcon%psi50_gs(1:16) = par3
+      pftcon%vcmaxpft(1:16) = par4
+
   
       ! Build the necessary CLM filters to process patches
   
