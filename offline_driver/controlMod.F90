@@ -18,7 +18,7 @@ module controlMod
 contains
 
   !-----------------------------------------------------------------------
-  subroutine control (ntim, clm_start_ymd, clm_start_tod, diratm, dirclm, dirout, dirin)
+  subroutine control (ntim, clm_start_ymd, clm_start_tod, diratm, dirclm, dirout, dirin, par1, par2, par3, par4)
     !
     ! !DESCRIPTION:
     ! Initialize run control variables from namelist
@@ -38,6 +38,13 @@ contains
     character(len=256), intent(out) :: dirclm   ! CLM history file directory path
     character(len=256), intent(out) :: dirout   ! Model output file directory path
     character(len=256), intent(out) :: dirin    ! Model input file directory path for profile data
+
+    real(r8), intent(out) :: par1              ! Parameter (pbeta_lai)
+    real(r8), intent(out) :: par2              ! Parameter (qbeta_lai)
+    real(r8), intent(out) :: par3              ! Parameter (psi50_gs)
+    real(r8), intent(out) :: par4              ! Parameter (vcmaxpft)
+
+
     !
     ! !LOCAL VARIABLES:
     character(len=6) :: tower_name              ! Flux tower site to process
@@ -49,8 +56,13 @@ contains
     integer :: i                                ! Index
     integer :: steps_per_day                    ! Number of time steps per day
 
+    real(r8) :: p1              ! Parameter (pbeta_lai)
+    real(r8) :: p2              ! Parameter (qbeta_lai)
+    real(r8) :: p3              ! Parameter (psi50_gs)
+    real(r8) :: p4              ! Parameter (vcmaxpft)
+    character(len=256) :: out_dir   ! Model output file directory path
     namelist /clmML_inparm/ tower_name, start_ymd, start_tod, stop_option, &
-    stop_n, clm_start_ymd, clm_start_tod
+    stop_n, clm_start_ymd, clm_start_tod, p1, p2, p3, p4, out_dir
     !---------------------------------------------------------------------
 
     ! Default namelist variables
@@ -62,13 +74,21 @@ contains
     stop_n = 0            ! Sets the length of the run (days or timesteps depending on stop_option)
     clm_start_ymd = 0     ! CLM history file start date (yyyymmdd format)
     clm_start_tod = 0     ! CLM history file start time-of-day (seconds past 0Z UTC)
-
+    p1 = 11.5_r8           ! Parameter (pbeta_lai)
+    p2 = 3.5_r8            ! Parameter (qbeta_lai)
+    p3 = -2.3_r8            ! Parameter (psi50_gs)
+    p4 = 70.1_r8            ! Parameter (vcmaxpft)
     ! Read namelist file
 
     write(iulog,*) 'Attempting to read namelist file .....'
     read (5, clmML_inparm)
     write(iulog,*) 'Successfully read namelist file'
 
+    ! Set parameters
+    par1 = p1
+    par2 = p2
+    par3 = p3
+    par4 = p4
     ! Set calendar variables
 
     start_date_ymd = start_ymd
@@ -91,7 +111,8 @@ contains
     else if (clm_phys == 'CLM5_0') then
        dirclm = '../input_files/clm5_0/'
     end if
-    dirout = '../output_files/'
+    !dirout = '../output_files/'
+    dirout = out_dir 
     dirin = '../output_files/'
 
     ! Match tower site to correct index for TowerDataMod arrays
@@ -123,7 +144,6 @@ contains
        steps_per_day = 86400 / dtstep      ! Number of time steps per day
        ntim = steps_per_day * stop_n       ! Number of time steps to execute
     end if
-
   end subroutine control
 
 end module controlMod
